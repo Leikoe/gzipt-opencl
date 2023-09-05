@@ -1,14 +1,14 @@
 use std::fs::File;
 use opencl3::command_queue::{CommandQueue, CL_QUEUE_PROFILING_ENABLE};
 use opencl3::context::Context;
-use opencl3::device::{get_all_devices, Device, CL_DEVICE_TYPE_GPU};
+use opencl3::device::{get_all_devices, Device, CL_DEVICE_TYPE_GPU, CL_DEVICE_TYPE_ALL};
 use opencl3::kernel::{ExecuteKernel, Kernel};
 use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_WRITE_ONLY};
 use opencl3::program::Program;
-use opencl3::types::{cl_event, cl_float, CL_BLOCKING, CL_NON_BLOCKING, cl_char, cl_int};
+use opencl3::types::{cl_event, cl_float, CL_BLOCKING, CL_NON_BLOCKING, cl_char, cl_int, cl_uchar};
 use opencl3::Result;
 use std::{fs, ptr};
-
+use std::ptr::null;
 
 const KERNEL_NAME: &str = "nomnom";
 
@@ -27,7 +27,7 @@ fn main() -> Result<()> {
         .expect("CommandQueue::create_default failed");
 
     // Build the OpenCL program source and create the kernel.
-    let program_source = fs::read_to_string("./src/kernel.cl")
+    let program_source = fs::read_to_string("./src/gzip.cl")
         .expect("Should have been able to read the file");
     let program = Program::create_and_build_from_source(&context, program_source.as_str(), "")
         .expect("Program::create_and_build_from_source failed");
@@ -37,7 +37,9 @@ fn main() -> Result<()> {
     // Compute data
 
     // The input data
-    let inputs = vec!["Good morning Dr. Chandra. This is Hal. I am ready for my first lesson.", "idk", "uwu"];
+    let inputs = vec![
+        &program_source[..1000];1_000_000
+    ];
 
     let mut strings = Vec::new();
     let mut lens = Vec::new();
@@ -45,7 +47,7 @@ fn main() -> Result<()> {
 
     let mut cursor = 0;
     for input in inputs.iter() {
-        input.chars().for_each(|x| strings.push(x as cl_char));
+        input.chars().for_each(|x| strings.push(x as cl_uchar));
         lens.push(input.len() as cl_int);
         offsets.push(cursor as cl_int);
 
@@ -55,7 +57,7 @@ fn main() -> Result<()> {
 
     // Create OpenCL device buffers
     let mut strings_buffer = unsafe {
-        Buffer::<cl_char>::create(&context, CL_MEM_READ_ONLY, strings.len(), ptr::null_mut())?
+        Buffer::<cl_uchar>::create(&context, CL_MEM_READ_ONLY, strings.len(), ptr::null_mut())?
     };
     let mut lens_buffer = unsafe {
         Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, inputs.len(), ptr::null_mut())?
@@ -97,7 +99,8 @@ fn main() -> Result<()> {
         unsafe { queue.enqueue_read_buffer(&compressed_lens_buffer, CL_BLOCKING, 0, &mut results, &events)? };
 
     // Output the first and last results
-    dbg!(results);
+    println!("Original lens: {:?}", lens[0]);
+    dbg!(results[0]);
 
     // Calculate the kernel duration, from the kernel_event
     let start_time = kernel_event.profiling_command_start()?;

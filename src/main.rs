@@ -10,7 +10,7 @@ use opencl3::Result;
 use std::{fs, ptr};
 use std::ptr::null;
 
-const KERNEL_NAME: &str = "nomnom";
+const KERNEL_NAME: &str = "compress";
 
 fn main() -> Result<()> {
     // Find a usable device for this application
@@ -38,7 +38,7 @@ fn main() -> Result<()> {
 
     // The input data
     let inputs = vec![
-        &program_source[..1000];1_000
+        &program_source[..1000];10_000
     ];
 
     let mut strings = Vec::new();

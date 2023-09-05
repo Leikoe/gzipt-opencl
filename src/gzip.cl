@@ -1,10 +1,10 @@
-// heavily copied from https://github.com/pfalcon/uzlib
+/* heavily copied from https://github.com/pfalcon/uzlib */
+
 #define assert(X) { \
-        if (!X) {   \
+        if (X == 0) {   \
             printf("Assertion failed: (%s), function %s, file %s.c, line %d.\n", #X, __FUNCTION__, __FILE__, __LINE__);\
         }\
     }
-
 
 typedef unsigned char uint8_t;
 typedef signed short int16_t;
@@ -263,6 +263,7 @@ void outbits(struct uzlib_comp *out, unsigned long bits, int nbits)
     out->noutbits += nbits;
     while (out->noutbits >= 8) {
         if (out->outlen >= out->outsize) {
+            assert(false); // buffer overflow :sob:
             out->outsize = out->outlen + 64;
 //            out->outbuf = sresize(out->outbuf, out->outsize, unsigned char); //TODO: well fuck, I can't realloc in openCL :/
         }
@@ -411,7 +412,7 @@ void zlib_match(struct uzlib_comp *out, int distance, int len)
     int i, j, k;
     int lcode;
 
-    assert(!out->comp_disabled);
+    assert(out->comp_disabled == 0);
 
     while (len > 0) {
         int thislen;
@@ -617,34 +618,34 @@ void uzlib_compress(struct uzlib_comp *data, const uint8_t *src, unsigned slen)
     }
 }
 
-#define MAX_BUFF_SIZE 3000
+#define MAX_BUFF_SIZE 8000
 
-__kernel void nomnom(
-        global char const* strings,
-        global int  const* lens,
-        global int  const* offsets,
-        global int* compressed_lens
+__kernel void compress(
+        __global unsigned char const* strings,
+        __global int  const* lens,
+        __global int  const* offsets,
+        __global int* compressed_lens
 ) {
     int gid = get_global_id(0); // Get the global ID of the work item.
     unsigned char input[MAX_BUFF_SIZE] = {0}; // Input string to compress
+    unsigned char output[MAX_BUFF_SIZE] = {0}; // Output buffer
     memcpy(&input, strings+offsets[gid], lens[gid]);
 
-    assert(1 % 2 == 0);
-
     struct uzlib_comp comp = {0};
-    comp.dict_size = 65536;
+    comp.dict_size = 32768;
     comp.hash_bits = 12;
     size_t hash_size = sizeof(uzlib_hash_entry_t) * (1 << comp.hash_bits);
     uzlib_hash_entry_t hash_table = {0};
     comp.hash_table = &hash_table;
     memset(comp.hash_table, 0, hash_size);
 
+    comp.outbuf = output;
+    comp.outsize = MAX_BUFF_SIZE;
+    memset(comp.outbuf, 0, MAX_BUFF_SIZE);
+
     zlib_start_block(&comp);
     uzlib_compress(&comp, input, lens[gid]);
     zlib_finish_block(&comp);
-
-//    printf("compressed to %u raw bytes\n", comp.outlen);
-
 
     compressed_lens[gid] = comp.outlen;
 }

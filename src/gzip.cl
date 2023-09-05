@@ -1,4 +1,9 @@
 // heavily copied from https://github.com/pfalcon/uzlib
+#define assert(X) { \
+        if (!X) {   \
+            printf("Assertion failed: (%s), function %s, file %s.c, line %d.\n", #X, __FUNCTION__, __FILE__, __LINE__);\
+        }\
+    }
 
 
 typedef unsigned char uint8_t;
@@ -253,7 +258,7 @@ void zlib_match(struct uzlib_comp *ctx, int distance, int len);
 
 void outbits(struct uzlib_comp *out, unsigned long bits, int nbits)
 {
-//    assert(out->noutbits + nbits <= 32);
+    assert(out->noutbits + nbits <= 32);
     out->outbits |= bits << out->noutbits;
     out->noutbits += nbits;
     while (out->noutbits >= 8) {
@@ -406,7 +411,7 @@ void zlib_match(struct uzlib_comp *out, int distance, int len)
     int i, j, k;
     int lcode;
 
-//    assert(!out->comp_disabled); // too bad assert isn't a thing in openCL :')
+    assert(!out->comp_disabled);
 
     while (len > 0) {
         int thislen;
@@ -431,7 +436,7 @@ void zlib_match(struct uzlib_comp *out, int distance, int len)
         i = -1;
         j = sizeof(lencodes) / sizeof(*lencodes);
         while (1) {
-//            assert(j - i >= 2); // too bad assert isn't a thing in openCL :')
+            assert(j - i >= 2);
             k = (j + i) / 2;
             if (thislen < FROM_LCODE(lencodes[k].min))
                 j = k;
@@ -469,7 +474,7 @@ void zlib_match(struct uzlib_comp *out, int distance, int len)
         i = -1;
         j = sizeof(distcodes) / sizeof(*distcodes);
         while (1) {
-//            assert(j - i >= 2); // too bad assert isn't a thing in openCL :')
+            assert(j - i >= 2);
             k = (j + i) / 2;
             if (distance < distcodes[k].min)
                 j = k;
@@ -623,6 +628,8 @@ __kernel void nomnom(
     int gid = get_global_id(0); // Get the global ID of the work item.
     unsigned char input[MAX_BUFF_SIZE] = {0}; // Input string to compress
     memcpy(&input, strings+offsets[gid], lens[gid]);
+
+    assert(1 % 2 == 0);
 
     struct uzlib_comp comp = {0};
     comp.dict_size = 65536;

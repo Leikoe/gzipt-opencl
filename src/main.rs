@@ -38,7 +38,7 @@ fn main() -> Result<()> {
 
     // The input data
     let inputs = vec![
-        &program_source[..1000];1_000_000
+        &program_source[..1000];1_000
     ];
 
     let mut strings = Vec::new();

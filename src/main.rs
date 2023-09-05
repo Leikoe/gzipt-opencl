@@ -27,7 +27,7 @@ fn main() -> Result<()> {
         .expect("CommandQueue::create_default failed");
 
     // Build the OpenCL program source and create the kernel.
-    let program_source = fs::read_to_string("./src/gzip.cl")
+    let program_source = fs::read_to_string("uzlib_compress.cl")
         .expect("Should have been able to read the file");
     let program = Program::create_and_build_from_source(&context, program_source.as_str(), "")
         .expect("Program::create_and_build_from_source failed");

@@ -19,6 +19,15 @@ void memcpy_global(void* dest, global const void* src, size_t n) {
     }
 }
 
+void memcpy(void* dest, const void* src, size_t n) {
+    char* destPtr = (char*)dest;
+    const char* srcPtr = (const char*)src;
+
+    for (size_t i = 0; i < n; i++) {
+        destPtr[i] = srcPtr[i];
+    }
+}
+
 void *memset(void *s, int c,  unsigned int len)
 {
     unsigned char* p=s;
@@ -45,6 +54,7 @@ void *memset(void *s, int c,  unsigned int len)
     #if defined(UNIX)
         #include <byteswap.h>
     #else
+        // https://github.com/icecoobe/sbc-windows/blob/master/byteswap.h
         #define bswap_16(value) \
                 ((((value) & 0xff) << 8) | ((value) >> 8))
 
@@ -444,7 +454,7 @@ size_t shoco_decompress(const char * const shoco_restrict original, size_t compl
   return o - out;
 }
 
-#define MAX_BUFF_SIZE 3000
+#define MAX_BUFF_SIZE 1000
 
 //__kernel void compress_kernel(
 //        __global char const* strings,
@@ -464,40 +474,50 @@ size_t shoco_decompress(const char * const shoco_restrict original, size_t compl
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define CLEAR_ARR(obj) memset((obj), 0, sizeof(obj))
 
-float ncd(__global const char *s1, int s1_len, __global const char *s2, int s2_len) {
+float ncd(const char *s1, int s1_len, const char *s2, int s2_len) {
     char input[MAX_BUFF_SIZE] = {0}; // Input string to compress
     char output[MAX_BUFF_SIZE] = {0}; // Output buffer
 
     // compute compressed length of s1
-    CLEAR_ARR(input);
-    memcpy_global(input, s1, s1_len);
-    int s1_len_compressed = shoco_compress(input, s1_len, output, MAX_BUFF_SIZE);
+    float s1_len_compressed = shoco_compress(s1, s1_len, output, MAX_BUFF_SIZE);
 
     // compute compressed length of s2
-    CLEAR_ARR(input);
-    memcpy_global(input, s2, s2_len);
-    int s2_len_compressed = shoco_compress(input, s2_len, output, MAX_BUFF_SIZE);
+    float s2_len_compressed = shoco_compress(s2, s2_len, output, MAX_BUFF_SIZE);
 
     // compute compressed length of (s1 + " " + s2)
-    CLEAR_ARR(input);
-    memcpy_global(input, s1, s1_len);
+    memcpy(input, s1, s1_len);
     input[s1_len] = ' ';
-    memcpy_global(input, s2, s2_len);
-    int concat_len_compressed = shoco_compress(input, s1_len + 1 + s2_len, output, MAX_BUFF_SIZE);
+    memcpy(input, s2, s2_len);
+    float concat_len_compressed = shoco_compress(input, s1_len + 1 + s2_len, output, MAX_BUFF_SIZE);
 
-    return (float)(concat_len_compressed - MIN(s1_len_compressed, s2_len_compressed)) / (float)MAX(s1_len_compressed, s2_len_compressed);
+    // return s2_len_compressed - s1_len_compressed;
+    return (concat_len_compressed - MIN(s1_len_compressed, s2_len_compressed)) / MAX(s1_len_compressed, s2_len_compressed);
 }
 
 __kernel void ncd_kernel(
-        __global char const* strings,
-        __global int  const* lens,
-        __global int  const* offsets,
-        __global float *ncds // [[float; strings.len()]; strings.len()]
-) {
-  const int gid_x = get_global_id(0); // Get the global ID of the work item.
-  const int gid_y = get_global_id(1); // Get the global ID of the work item.
-  const int n = get_global_size(0); // Get the global ID of the work item.
+        __global char const* strings_x,
+        __global int  const* lens_x,
+        __global int  const* offsets_x,
 
-  ncds[gid_y * n + gid_x] = ncd(strings+offsets[gid_y], lens[gid_y], strings+offsets[gid_x], lens[gid_x]);
-  //printf("%d,%d\n", gid_y, gid_y);
+        __global char const* strings_y,
+        __global int  const* lens_y,
+        __global int  const* offsets_y,
+
+        __global float *ncds // [[float; len(Y)]; len(X)]
+) {
+  const int gid_x = get_global_id(0); // Get the global ID of the work item, on 1st axis
+  const int gid_y = get_global_id(1); // Get the global ID of the work item, on 2nd axis
+  const int len_x = get_global_size(0); // Get the global size for 1st axis
+  const int len_y = get_global_size(1); // Get the global size for 2nd axis
+
+  char s1[MAX_BUFF_SIZE] = {0}; // string 1
+  char s2[MAX_BUFF_SIZE] = {0}; // string 2
+
+  int len1 = lens_x[gid_x];
+  int len2 = lens_y[gid_y];
+
+  memcpy_global(s1, strings_x+offsets_x[gid_x], len1);
+  memcpy_global(s2, strings_y+offsets_y[gid_y], len2);
+
+  ncds[gid_x * len_y + gid_y] = ncd(s1, len1, s2, len2);
 }

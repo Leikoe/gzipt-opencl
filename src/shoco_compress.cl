@@ -19,6 +19,16 @@ void memcpy_global(void* dest, global const void* src, size_t n) {
     }
 }
 
+void *memset(void *s, int c,  unsigned int len)
+{
+    unsigned char* p=s;
+    while(len--)
+    {
+        *p++ = (unsigned char)c;
+    }
+    return s;
+}
+
 #if (defined (__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__) || __BIG_ENDIAN__)
   #define swap(x) (x)
 #else
@@ -32,7 +42,22 @@ void memcpy_global(void* dest, global const void* src, size_t n) {
       #define swap(x) ((x<<24) + ((x&0x0000FF00)<<8) + ((x&0x00FF0000)>>8) + (x>>24))
     #endif
   #else
-    #include <byteswap.h>
+    #if defined(UNIX)
+        #include <byteswap.h>
+    #else
+        #define bswap_16(value) \
+                ((((value) & 0xff) << 8) | ((value) >> 8))
+
+        #define bswap_32(value) \
+                (((uint32_t)bswap_16((uint16_t)((value) & 0xffff)) << 16) | \
+                (uint32_t)bswap_16((uint16_t)((value) >> 16)))
+
+        #define bswap_64(value) \
+                (((uint64_t)bswap_32((uint32_t)((value) & 0xffffffff)) \
+                << 32) | \
+                (uint64_t)bswap_32((uint32_t)((value) >> 32)))
+    #endif
+
     #define swap(x) bswap_32(x)
   #endif
 #endif
@@ -437,26 +462,30 @@ size_t shoco_decompress(const char * const shoco_restrict original, size_t compl
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
+#define CLEAR_ARR(obj) memset((obj), 0, sizeof(obj))
 
 float ncd(__global const char *s1, int s1_len, __global const char *s2, int s2_len) {
     char input[MAX_BUFF_SIZE] = {0}; // Input string to compress
     char output[MAX_BUFF_SIZE] = {0}; // Output buffer
 
     // compute compressed length of s1
+    CLEAR_ARR(input);
     memcpy_global(input, s1, s1_len);
     int s1_len_compressed = shoco_compress(input, s1_len, output, MAX_BUFF_SIZE);
 
     // compute compressed length of s2
+    CLEAR_ARR(input);
     memcpy_global(input, s2, s2_len);
     int s2_len_compressed = shoco_compress(input, s2_len, output, MAX_BUFF_SIZE);
 
     // compute compressed length of (s1 + " " + s2)
+    CLEAR_ARR(input);
     memcpy_global(input, s1, s1_len);
     input[s1_len] = ' ';
     memcpy_global(input, s2, s2_len);
     int concat_len_compressed = shoco_compress(input, s1_len + 1 + s2_len, output, MAX_BUFF_SIZE);
 
-    return (concat_len_compressed - MIN(s1_len_compressed, s2_len_compressed)) / MAX(s1_len_compressed, s2_len_compressed);
+    return (float)(concat_len_compressed - MIN(s1_len_compressed, s2_len_compressed)) / (float)MAX(s1_len_compressed, s2_len_compressed);
 }
 
 __kernel void ncd_kernel(
@@ -470,5 +499,5 @@ __kernel void ncd_kernel(
   const int n = get_global_size(0); // Get the global ID of the work item.
 
   ncds[gid_y * n + gid_x] = ncd(strings+offsets[gid_y], lens[gid_y], strings+offsets[gid_x], lens[gid_x]);
-  printf("%d,%d\n", gid_y, gid_y);
+  //printf("%d,%d\n", gid_y, gid_y);
 }

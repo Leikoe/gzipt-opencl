@@ -39,7 +39,11 @@ fn main() -> Result<()> {
 
     // The input data
     let inputs = vec![
-        &program_source[..100];1_000
+        "hello",
+        "hi",
+        "uwu",
+        "ily",
+        "nonly"
     ];
 
     let mut strings = Vec::new();
@@ -111,6 +115,11 @@ fn main() -> Result<()> {
         let end_time = kernel_event.profiling_command_end()?;
         let duration = end_time - start_time;
         println!("kernel execution duration (ms): {}", Duration::from_nanos(duration).as_millis());
+        // print output
+        for i in 0..inputs.len() {
+            println!("{:?}", &results[i*inputs.len()..(i+1)*inputs.len()]);
+        }
+
         total_duration += duration;
     }
 

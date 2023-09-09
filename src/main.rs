@@ -157,7 +157,7 @@ fn main() {
     // }
 
     let start = Instant::now();
-    let text = fs::read_to_string("./input.txt").unwrap()[..1000].to_string();
+    let text = fs::read_to_string("./input.txt").unwrap()[..100].to_string();
 
     // # here are all the unique characters that occur in this text
     let chars = {
@@ -214,20 +214,24 @@ fn main() {
     let ncds = get_ncds(&X, &X);
     println!("ncd_scores | took: {:.2?}", before.elapsed());
 
-    for line in ncds {
-        println!("{:?}", line);
-    }
+    // for line in &ncds {
+    //     println!("{:?}", line);
+    // }
 
-    println!("TOOK: {}", start.elapsed().as_secs_f64());
-
-    let map = Builder::default().build(&ncds.iter().map(|v| Point(v.clone())).collect(), Y);
+    let before = Instant::now();
+    let x: Vec<Point> = ncds.iter().map(|v| Point(v.clone())).collect();
+    println!("x | took: {:.2?}", before.elapsed());
+    let map = Builder::default().build(x, Y);
     let mut search = Search::default();
+    println!("build ANN | took: {:.2?}", before.elapsed());
 
     let cambridge_blue = Point(get_ncds(&vec![&data[0..n_ctx as usize]], &X)[0].clone());
 
     let closest_point = map.search(&cambridge_blue, &mut search).next().unwrap();
 
     println!("{:?}", closest_point.value);
+
+    println!("TOOK: {}", start.elapsed().as_secs_f64());
 }
 
 impl instant_distance::Point for Point {

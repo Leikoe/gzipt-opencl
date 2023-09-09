@@ -620,7 +620,7 @@ void uzlib_compress(struct uzlib_comp *data, const uint8_t *src, unsigned slen)
 
 #define MAX_BUFF_SIZE 8000
 
-__kernel void compress(
+__kernel void compress_kernel(
         __global unsigned char const* strings,
         __global int  const* lens,
         __global int  const* offsets,

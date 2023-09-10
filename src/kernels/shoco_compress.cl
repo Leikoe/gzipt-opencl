@@ -455,7 +455,7 @@ size_t shoco_decompress(const char * const shoco_restrict original, size_t compl
   return o - out;
 }
 
-#define N_CTX 100
+#define N_CTX 128
 
 //__kernel void compress_kernel(
 //        __global char const* strings,
@@ -491,12 +491,7 @@ half ncd(const char *s1, int s1_len, const char *s2, int s2_len) {
     memcpy(input, s2, s2_len);
     half concat_len_compressed = (half)shoco_compress(input, s1_len + 1 + s2_len, output, N_CTX);
 
-    // return s2_len_compressed - s1_len_compressed;
-    half result = (concat_len_compressed - MIN(s1_len_compressed, s2_len_compressed)) / MAX(s1_len_compressed, s2_len_compressed);
-//    if (isfinite(result) == 0) {
-//        printf("non finite result for {concat_len_compressed: %d, s1_len_compressed: %d, s2_len_compressed: %d }\n", concat_len_compressed, s1_len_compressed, s2_len_compressed);
-//    }
-    return result;
+    return (concat_len_compressed - MIN(s1_len_compressed, s2_len_compressed)) / MAX(s1_len_compressed, s2_len_compressed);
 }
 
 __kernel void ncd_kernel(
@@ -515,14 +510,16 @@ __kernel void ncd_kernel(
   const int len_x = get_global_size(0); // Get the global size for 1st axis
   const int len_y = get_global_size(1); // Get the global size for 2nd axis
 
-  char s1[N_CTX] = {0}; // string 1
-  char s2[N_CTX] = {0}; // string 2
+  char s1[N_CTX+1] = {0}; // string 1
+  char s2[N_CTX+1] = {0}; // string 2
 
   int len1 = lens_x[gid_x];
   int len2 = lens_y[gid_y];
 
   memcpy_global(s1, strings_x+offsets_x[gid_x], len1);
   memcpy_global(s2, strings_y+offsets_y[gid_y], len2);
+  s1[len1] = '\0';
+  s2[len2] = '\0';
 
   ncds[gid_x * len_y + gid_y] = ncd(s1, len1, s2, len2);
 }

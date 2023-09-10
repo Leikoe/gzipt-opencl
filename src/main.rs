@@ -35,6 +35,8 @@ fn to_cl(v: &Vec<&[u8]>) -> (Vec<cl_char>, Vec<cl_int>, Vec<cl_int>) {
 }
 
 fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
+    let same_vec = x == y;
+
     // Find a usable device for this application
     let device_id = *get_all_devices(CL_DEVICE_TYPE_GPU)
         .expect("couldn't get all devices")
@@ -60,8 +62,6 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
     // Compute data
 
     let (strings_x, lens_x, offsets_x) = to_cl(x);
-    let (strings_y, lens_y, offsets_y) = to_cl(y);
-
 
     // Create OpenCL device buffers
     // buffers for x
@@ -75,50 +75,67 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
         Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, x.len(), ptr::null_mut()).expect("couldn't create offsets_x_buffer")
     };
 
-
-    // buffers for y
-    let mut strings_y_buffer = unsafe {
-        Buffer::<cl_char>::create(&context, CL_MEM_READ_ONLY, strings_y.len(), ptr::null_mut()).expect("couldn't create strings_y_buffer")
-    };
-    let mut lens_y_buffer = unsafe {
-        Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, y.len(), ptr::null_mut()).expect("couldn't create lens_y_buffer")
-    };
-    let mut offsets_y_buffer = unsafe {
-        Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, y.len(), ptr::null_mut()).expect("couldn't create offsets_y_buffer")
-    };
-
     // output buffer
     let ncds_buffer = unsafe {
         Buffer::<cl_float>::create(&context, CL_MEM_WRITE_ONLY, x.len() * y.len(), ptr::null_mut()).expect("couldn't create ncds_buffer")
     };
 
-
     // Blocking write
     unsafe { queue.enqueue_write_buffer(&mut strings_x_buffer, CL_BLOCKING, 0, &strings_x, &[]).expect("couldb't write_buffer strings_x_buffer") };
     unsafe { queue.enqueue_write_buffer(&mut lens_x_buffer, CL_BLOCKING, 0, &lens_x, &[]).expect("couldb't write_buffer lens_x_buffer") };
     unsafe { queue.enqueue_write_buffer(&mut offsets_x_buffer, CL_BLOCKING, 0, &offsets_x, &[]).expect("couldb't write_buffer offsets_x_buffer") };
-    unsafe { queue.enqueue_write_buffer(&mut strings_y_buffer, CL_BLOCKING, 0, &strings_y, &[]).expect("couldb't write_buffer strings_y_buffer") };
-    unsafe { queue.enqueue_write_buffer(&mut lens_y_buffer, CL_BLOCKING, 0, &lens_y, &[]).expect("couldb't write_buffer lens_y_buffer") };
-    unsafe { queue.enqueue_write_buffer(&mut offsets_y_buffer, CL_BLOCKING, 0, &offsets_y, &[]).expect("couldb't write_buffer offsets_y_buffer") };
 
     println!("[CL] Launching {}x{} kernel", x.len(), y.len());
-    // Use the ExecuteKernel builder to set the kernel buffer and
-    // cl_float value arguments, before setting the one dimensional
-    // global_work_size for the call to enqueue_nd_range.
-    // Unwraps the Result to get the kernel execution event.
-    let kernel_event = unsafe {
-        ExecuteKernel::new(&kernel)
-            .set_arg(&strings_x_buffer)
-            .set_arg(&lens_x_buffer)
-            .set_arg(&offsets_x_buffer)
-            .set_arg(&strings_y_buffer)
-            .set_arg(&lens_y_buffer)
-            .set_arg(&offsets_y_buffer)
-            .set_arg(&ncds_buffer)
-            .set_global_work_sizes(&[x.len(), y.len()])
-            .enqueue_nd_range(&queue)
-            .expect("couldn't enqueue nd range")
+
+    // optimization for the same_vec case
+    let kernel_event = if !same_vec {
+        let (strings_y, lens_y, offsets_y) = to_cl(y);
+
+        // buffers for y
+        let mut strings_y_buffer = unsafe {
+            Buffer::<cl_char>::create(&context, CL_MEM_READ_ONLY, strings_y.len(), ptr::null_mut()).expect("couldn't create strings_y_buffer")
+        };
+        let mut lens_y_buffer = unsafe {
+            Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, y.len(), ptr::null_mut()).expect("couldn't create lens_y_buffer")
+        };
+        let mut offsets_y_buffer = unsafe {
+            Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, y.len(), ptr::null_mut()).expect("couldn't create offsets_y_buffer")
+        };
+
+        unsafe { queue.enqueue_write_buffer(&mut strings_y_buffer, CL_BLOCKING, 0, &strings_y, &[]).expect("couldb't write_buffer strings_y_buffer") };
+        unsafe { queue.enqueue_write_buffer(&mut lens_y_buffer, CL_BLOCKING, 0, &lens_y, &[]).expect("couldb't write_buffer lens_y_buffer") };
+        unsafe { queue.enqueue_write_buffer(&mut offsets_y_buffer, CL_BLOCKING, 0, &offsets_y, &[]).expect("couldb't write_buffer offsets_y_buffer") };
+
+        unsafe {
+            ExecuteKernel::new(&kernel)
+                .set_arg(&strings_x_buffer)
+                .set_arg(&lens_x_buffer)
+                .set_arg(&offsets_x_buffer)
+                .set_arg(&strings_y_buffer)
+                .set_arg(&lens_y_buffer)
+                .set_arg(&offsets_y_buffer)
+                .set_arg(&ncds_buffer)
+                .set_global_work_sizes(&[x.len(), y.len()])
+                .enqueue_nd_range(&queue)
+                .expect("couldn't enqueue nd range")
+        }
+    } else {
+        println!("[CL] same_vec optimization used");
+        unsafe {
+            ExecuteKernel::new(&kernel)
+                .set_arg(&strings_x_buffer)
+                .set_arg(&lens_x_buffer)
+                .set_arg(&offsets_x_buffer)
+                .set_arg(&strings_x_buffer)
+                .set_arg(&lens_x_buffer)
+                .set_arg(&offsets_x_buffer)
+                .set_arg(&ncds_buffer)
+                .set_global_work_sizes(&[x.len(), y.len()])
+                .enqueue_nd_range(&queue)
+                .expect("couldn't enqueue nd range")
+        }
     };
+
 
     let mut events: Vec<cl_event> = Vec::default();
     events.push(kernel_event.get());
@@ -144,22 +161,8 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
 
 
 fn main() {
-    // {
-    //     let strings: Vec<Vec<u8>> = vec!["lol".chars().map(|c| c as u8).collect(),
-    //                                      "idk man this seems odd".chars().map(|c| c as u8).collect(),
-    //                                      "opencl love :3".chars().map(|c| c as u8).collect(),
-    //                                      "i like opencl".chars().map(|c| c as u8).collect()];
-    //     let xs: Vec<&[u8]> = vec![&strings[0]];
-    //     let ys: Vec<&[u8]> = vec![&strings[1], &strings[2], &strings[0], &strings[3]];
-    //
-    //     let ncds = get_ncds(&xs, &ys);
-    //     for line in ncds {
-    //         print!("{:?}", line);
-    //     }
-    // }
-
     let start = Instant::now();
-    let text = fs::read_to_string("./input.txt").unwrap()[..100].to_string();
+    let text = fs::read_to_string("./input.txt").unwrap()[..5000].to_string();
 
     // # here are all the unique characters that occur in this text
     let chars = {
@@ -222,21 +225,22 @@ fn main() {
 
     let before = Instant::now();
     // use the kiddo::KdTree type to get up and running quickly with default settings
-    let mut kdtree = KdTree::new(ncds[0].len());
-    for i in 0..ncds.len() {
-        for j in 0..ncds[i].len() {
-            if !ncds[i][j].is_finite() {
-                println!("[ERR] non finite f32 at ({i}, {j})");
-            }
-        }
-        kdtree.add(&ncds[i], i).expect("TODO: panic message");
-    }
-    println!("build kdtree | took: {:.2?}", before.elapsed());
-
-    let query = get_ncds(&vec![&data[0..n_ctx as usize]], &X)[0].clone();
-    let closest_points = kdtree.nearest(&query, 3, &squared_euclidean).unwrap();
-    let closest_points_v = closest_points.iter().map(|x| itos.get(Y[*x.1])).collect::<Vec<_>>();
-    println!("{:?}", closest_points_v);
+    // let mut kdtree = KdTree::new(ncds[0].len());
+    // 'outer_loop: for i in 0..ncds.len() {
+    //     for j in 0..ncds[i].len() {
+    //         if !ncds[i][j].is_finite() {
+    //             println!("[ERR] non finite f32 at ({i}, {j}), char: {:?}", itos.get(Y[i]));
+    //             continue 'outer_loop;
+    //         }
+    //     }
+    //     kdtree.add(&ncds[i], i).expect("TODO: panic message");
+    // }
+    // println!("build kdtree | took: {:.2?}", before.elapsed());
+    //
+    // let query = get_ncds(&vec![&data[0..n_ctx as usize]], &X)[0].clone();
+    // let closest_points = kdtree.nearest(&query, 7, &squared_euclidean).unwrap();
+    // let closest_points_v = closest_points.iter().map(|x| itos.get(Y[*x.1])).collect::<Vec<_>>();
+    // println!("{:?}", closest_points_v);
 
     println!("TOOK: {}", start.elapsed().as_secs_f64());
 }

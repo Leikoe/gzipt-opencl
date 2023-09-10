@@ -454,7 +454,7 @@ size_t shoco_decompress(const char * const shoco_restrict original, size_t compl
   return o - out;
 }
 
-#define MAX_BUFF_SIZE 1000
+#define N_CTX 8
 
 //__kernel void compress_kernel(
 //        __global char const* strings,
@@ -475,23 +475,27 @@ size_t shoco_decompress(const char * const shoco_restrict original, size_t compl
 #define CLEAR_ARR(obj) memset((obj), 0, sizeof(obj))
 
 float ncd(const char *s1, int s1_len, const char *s2, int s2_len) {
-    char input[MAX_BUFF_SIZE] = {0}; // Input string to compress
-    char output[MAX_BUFF_SIZE] = {0}; // Output buffer
+    char input[N_CTX + 1 + N_CTX] = {0}; // Input string to compress
+    char output[N_CTX] = {0}; // Output buffer
 
     // compute compressed length of s1
-    float s1_len_compressed = shoco_compress(s1, s1_len, output, MAX_BUFF_SIZE);
+    float s1_len_compressed = shoco_compress(s1, s1_len, output, N_CTX);
 
     // compute compressed length of s2
-    float s2_len_compressed = shoco_compress(s2, s2_len, output, MAX_BUFF_SIZE);
+    float s2_len_compressed = shoco_compress(s2, s2_len, output, N_CTX);
 
     // compute compressed length of (s1 + " " + s2)
     memcpy(input, s1, s1_len);
     input[s1_len] = ' ';
     memcpy(input, s2, s2_len);
-    float concat_len_compressed = shoco_compress(input, s1_len + 1 + s2_len, output, MAX_BUFF_SIZE);
+    float concat_len_compressed = shoco_compress(input, s1_len + 1 + s2_len, output, N_CTX);
 
     // return s2_len_compressed - s1_len_compressed;
-    return (concat_len_compressed - MIN(s1_len_compressed, s2_len_compressed)) / MAX(s1_len_compressed, s2_len_compressed);
+    float result = (concat_len_compressed - MIN(s1_len_compressed, s2_len_compressed)) / MAX(s1_len_compressed, s2_len_compressed);
+    if (isfinite(result) == 0) {
+        printf("non finite result for {concat_len_compressed: %d, s1_len_compressed: %d, s2_len_compressed: %d }\n", concat_len_compressed, s1_len_compressed, s2_len_compressed);
+    }
+    return result;
 }
 
 __kernel void ncd_kernel(
@@ -510,8 +514,8 @@ __kernel void ncd_kernel(
   const int len_x = get_global_size(0); // Get the global size for 1st axis
   const int len_y = get_global_size(1); // Get the global size for 2nd axis
 
-  char s1[MAX_BUFF_SIZE] = {0}; // string 1
-  char s2[MAX_BUFF_SIZE] = {0}; // string 2
+  char s1[N_CTX] = {0}; // string 1
+  char s2[N_CTX] = {0}; // string 2
 
   int len1 = lens_x[gid_x];
   int len2 = lens_y[gid_y];

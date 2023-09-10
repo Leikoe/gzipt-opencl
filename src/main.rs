@@ -1,26 +1,23 @@
 use opencl3::command_queue::{CommandQueue, CL_QUEUE_PROFILING_ENABLE};
 use opencl3::context::Context;
-use opencl3::device::{get_all_devices, Device, CL_DEVICE_TYPE_GPU, CL_DEVICE_TYPE_ALL, CL_DEVICE_TYPE_CPU};
+use opencl3::device::{get_all_devices, Device, CL_DEVICE_TYPE_GPU};
 use opencl3::kernel::{ExecuteKernel, Kernel};
 use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_WRITE_ONLY};
 use opencl3::program::Program;
-use opencl3::types::{cl_event, cl_float, CL_BLOCKING, CL_NON_BLOCKING, cl_char, cl_int, cl_uchar, cl_half};
-use opencl3::Result;
-use std::{fs, io, ptr};
+use opencl3::types::{cl_event, CL_BLOCKING, cl_char, cl_int, cl_half};
+use std::{fs, ptr};
 use std::cmp::min;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use indicatif::ProgressIterator;
 use kdtree::KdTree;
-use kdtree::ErrorKind;
 use kdtree::distance::squared_euclidean;
-use opencl3::error_codes::ClError;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use std::env;
-use std::io::{stdout, Write};
-use std::thread::sleep;
+use std::io::Write;
 use lazy_static::lazy_static;
+use rand::prelude::*;
 
 const KERNEL_NAME: &str = "ncd_kernel";
 lazy_static! {
@@ -176,23 +173,7 @@ fn main() {
     println!("DEBUG={}", *DEBUG);
 
     let start = Instant::now();
-    let text = fs::read_to_string("./input.txt").unwrap()[..5000].to_string();
-
-    // # here are all the unique characters that occur in this text
-    // let chars = {
-    //     let chars_set: HashSet<char> = HashSet::from_iter(text.chars());
-    //     let mut chars: Vec<char> = Vec::from_iter(chars_set);
-    //     chars.sort();
-    //     chars
-    // };
-    //
-    // // create a mapping from characters to integers
-    // let mut stoi : HashMap<char, u8> = HashMap::from_iter(
-    //     chars.iter().enumerate().map(|(i, c)| (c.clone(), i as u8))
-    // );
-    // let mut itos : HashMap<u8, char> = HashMap::from_iter(
-    //     chars.iter().enumerate().map(|(i, c)| (i as u8, c.clone()))
-    // );
+    let text = fs::read_to_string("./input.txt").unwrap().to_ascii_lowercase();
 
     // encoder: take a string, output a list of integers
     let encode = |s: &str| s.chars().map(|c| c as u8).collect::<Vec<u8>>();
@@ -200,31 +181,33 @@ fn main() {
     let decode = |l: Vec<u8>| l.iter().map(|i| *i as char).collect::<String>();
 
     let data = encode(text.as_str());
-    let n_vocab: i64 = u8::MAX as i64;
-    let n_ctx : i64 = 8;
-    let n_train: i64 = data.len() as i64;
+    let n_vocab: usize = u8::MAX as usize;
+    let n_ctx : usize = 8;
+    let n_iter: usize = 5000;
 
     println!("n_vocab = {n_vocab}");
     println!("n_ctx   = {n_ctx}");
-    println!("n_train = {n_train}");
+    println!("n_iter = {n_iter}");
 
 
-    let mut X = Vec::with_capacity((n_train*n_ctx) as usize);
-    let mut Y= Vec::with_capacity((n_train*n_ctx) as usize);
+    let mut X = Vec::with_capacity(n_iter*n_ctx);
+    let mut Y= Vec::with_capacity(n_iter*n_ctx);
 
     let before = Instant::now();
-    let d = get_data(&data, n_ctx);
+    let d = get_batch(&data, n_ctx);
     if *DEBUG >= 1 {
         println!("get_data | Elapsed time: {:.2?}", before.elapsed());
     }
 
     let before = Instant::now();
-    for (x, y) in d.0.iter().zip(d.1.iter()).progress() {
-        for token_idx in 0..n_ctx as usize {
+    for _ in (0..n_iter).progress() {
+        let (x, y) = get_batch(&data, n_ctx);
+
+        for token_idx in 0..n_ctx {
             let context = (min(x.0, token_idx+1), x.1);
             let target = &y[token_idx];
 
-            // println!("when context is {:?}, target is {}", decode(context.to_vec()), itos.get(target).unwrap());
+            // println!("when context is {:?}, target is {}", decode(data[context.1..context.1+context.0].to_vec()), *target as char);
             X.push(context);
             Y.push(target);
         }
@@ -260,7 +243,7 @@ fn main() {
 
     for _ in 0..max_new_tokens {
         let before = Instant::now();
-        let query = get_ncds((&ctx.chars().map(|x| x as u8).collect(), &vec![(n_ctx as usize, ctx.len()-n_ctx as usize)]), (&data, &X))[0].clone();
+        let query = get_ncds((&ctx.chars().map(|x| x as u8).collect(), &vec![(n_ctx, ctx.len()-n_ctx)]), (&data, &X))[0].clone();
         let closest_points = kdtree.nearest(&query, 7, &squared_euclidean).unwrap();
         let closest_points_v = closest_points.iter().map(|x| *Y[*x.1] as char).collect::<Vec<_>>();
         let mut t = {
@@ -284,17 +267,19 @@ fn main() {
         print!("{t}");
         std::io::stdout().flush().unwrap();
     }
-    println!("");
+    println!();
 
     println!("Generated {} tokens in {}", max_new_tokens, start.elapsed().as_secs_f64());
 }
 
 
-fn get_data(data: &Vec<u8>, n_ctx: i64) -> (Vec<(usize, usize)>, Vec<&[u8]>) {
-    let ix = Vec::from_iter(0..(data.len() - n_ctx as usize));
+fn get_batch(data: &Vec<u8>, n_ctx: usize) -> ((usize, usize), &[u8]) {
+    let y: f64 = rand::random();
+    let i = ((data.len() - n_ctx) as f64 * y) as usize;
+
     // we make pairs of (len, offset) to point into the data
-    let x = ix.iter().map(|&i| (n_ctx as usize, i)).collect();
-    let y = ix.iter().map(|&i| &data[(i+1)..(i+n_ctx as usize+1)]).collect();
+    let x = (n_ctx, i);
+    let y = &data[(i+1)..(i+n_ctx+1)];
 
     (x, y)
 }

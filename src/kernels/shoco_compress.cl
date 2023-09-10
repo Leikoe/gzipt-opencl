@@ -1,4 +1,5 @@
 #define SIZE_MAX 65535 // Defined in stdint.h
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
 
 typedef unsigned char uint8_t;
 typedef char int8_t;
@@ -454,7 +455,7 @@ size_t shoco_decompress(const char * const shoco_restrict original, size_t compl
   return o - out;
 }
 
-#define N_CTX 8
+#define N_CTX 100
 
 //__kernel void compress_kernel(
 //        __global char const* strings,
@@ -474,27 +475,27 @@ size_t shoco_decompress(const char * const shoco_restrict original, size_t compl
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define CLEAR_ARR(obj) memset((obj), 0, sizeof(obj))
 
-float ncd(const char *s1, int s1_len, const char *s2, int s2_len) {
+half ncd(const char *s1, int s1_len, const char *s2, int s2_len) {
     char input[N_CTX + 1 + N_CTX] = {0}; // Input string to compress
     char output[N_CTX] = {0}; // Output buffer
 
     // compute compressed length of s1
-    float s1_len_compressed = shoco_compress(s1, s1_len, output, N_CTX);
+    half s1_len_compressed = (half)shoco_compress(s1, s1_len, output, N_CTX);
 
     // compute compressed length of s2
-    float s2_len_compressed = shoco_compress(s2, s2_len, output, N_CTX);
+    half s2_len_compressed = (half)shoco_compress(s2, s2_len, output, N_CTX);
 
     // compute compressed length of (s1 + " " + s2)
     memcpy(input, s1, s1_len);
     input[s1_len] = ' ';
     memcpy(input, s2, s2_len);
-    float concat_len_compressed = shoco_compress(input, s1_len + 1 + s2_len, output, N_CTX);
+    half concat_len_compressed = (half)shoco_compress(input, s1_len + 1 + s2_len, output, N_CTX);
 
     // return s2_len_compressed - s1_len_compressed;
-    float result = (concat_len_compressed - MIN(s1_len_compressed, s2_len_compressed)) / MAX(s1_len_compressed, s2_len_compressed);
-    if (isfinite(result) == 0) {
-        printf("non finite result for {concat_len_compressed: %d, s1_len_compressed: %d, s2_len_compressed: %d }\n", concat_len_compressed, s1_len_compressed, s2_len_compressed);
-    }
+    half result = (concat_len_compressed - MIN(s1_len_compressed, s2_len_compressed)) / MAX(s1_len_compressed, s2_len_compressed);
+//    if (isfinite(result) == 0) {
+//        printf("non finite result for {concat_len_compressed: %d, s1_len_compressed: %d, s2_len_compressed: %d }\n", concat_len_compressed, s1_len_compressed, s2_len_compressed);
+//    }
     return result;
 }
 
@@ -507,7 +508,7 @@ __kernel void ncd_kernel(
         __global int  const* lens_y,
         __global int  const* offsets_y,
 
-        __global float *ncds // [[float; len(Y)]; len(X)]
+        __global half *ncds // [[float; len(Y)]; len(X)]
 ) {
   const int gid_x = get_global_id(0); // Get the global ID of the work item, on 1st axis
   const int gid_y = get_global_id(1); // Get the global ID of the work item, on 2nd axis

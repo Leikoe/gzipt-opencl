@@ -4,9 +4,10 @@ use opencl3::device::{get_all_devices, Device, CL_DEVICE_TYPE_GPU, CL_DEVICE_TYP
 use opencl3::kernel::{ExecuteKernel, Kernel};
 use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_WRITE_ONLY};
 use opencl3::program::Program;
-use opencl3::types::{cl_event, cl_float, CL_BLOCKING, CL_NON_BLOCKING, cl_char, cl_int, cl_uchar};
+use opencl3::types::{cl_event, cl_float, CL_BLOCKING, CL_NON_BLOCKING, cl_char, cl_int, cl_uchar, cl_half};
 use opencl3::Result;
 use std::{fs, ptr};
+use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use kdtree::KdTree;
@@ -17,24 +18,20 @@ use opencl3::error_codes::ClError;
 const KERNEL_NAME: &str = "ncd_kernel";
 
 // return (chars, lens, offsets)
-fn to_cl(v: &Vec<&[u8]>) -> (Vec<cl_char>, Vec<cl_int>, Vec<cl_int>) {
-    let mut strings = Vec::new();
+fn to_cl(v: &(&Vec<u8>, &Vec<(usize, usize)>)) -> (Vec<cl_char>, Vec<cl_int>, Vec<cl_int>) {
+    let mut strings = v.0.iter().map(|x| *x as cl_char).collect();
     let mut lens = Vec::new();
     let mut offsets = Vec::new();
 
-    let mut cursor = 0;
-    for input in v.iter() {
-        input.iter().for_each(|x| strings.push(*x as cl_char));
-        lens.push(input.len() as cl_int);
-        offsets.push(cursor as cl_int);
-
-        cursor += input.len();
+    for (len, offset) in v.1.iter() {
+        lens.push(*len as cl_int);
+        offsets.push(*offset as cl_int);
     }
 
     (strings, lens, offsets)
 }
 
-fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
+fn get_ncds(x: (&Vec<u8>, &Vec<(usize, usize)>), y: (&Vec<u8>, &Vec<(usize, usize)>)) -> Vec<Vec<f32>> {
     let same_vec = x == y;
 
     // Find a usable device for this application
@@ -61,7 +58,7 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
     /////////////////////////////////////////////////////////////////////
     // Compute data
 
-    let (strings_x, lens_x, offsets_x) = to_cl(x);
+    let (strings_x, lens_x, offsets_x) = to_cl(&x);
 
     // Create OpenCL device buffers
     // buffers for x
@@ -69,15 +66,15 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
         Buffer::<cl_char>::create(&context, CL_MEM_READ_ONLY, strings_x.len(), ptr::null_mut()).expect("couldn't create strings_x_buffer")
     };
     let mut lens_x_buffer = unsafe {
-        Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, x.len(), ptr::null_mut()).expect("couldn't create lens_x_buffer")
+        Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, x.1.len(), ptr::null_mut()).expect("couldn't create lens_x_buffer")
     };
     let mut offsets_x_buffer = unsafe {
-        Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, x.len(), ptr::null_mut()).expect("couldn't create offsets_x_buffer")
+        Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, x.1.len(), ptr::null_mut()).expect("couldn't create offsets_x_buffer")
     };
 
     // output buffer
     let ncds_buffer = unsafe {
-        Buffer::<cl_float>::create(&context, CL_MEM_WRITE_ONLY, x.len() * y.len(), ptr::null_mut()).expect("couldn't create ncds_buffer")
+        Buffer::<cl_half>::create(&context, CL_MEM_WRITE_ONLY, x.1.len() * y.1.len(), ptr::null_mut()).expect("couldn't create ncds_buffer")
     };
 
     // Blocking write
@@ -85,21 +82,21 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
     unsafe { queue.enqueue_write_buffer(&mut lens_x_buffer, CL_BLOCKING, 0, &lens_x, &[]).expect("couldb't write_buffer lens_x_buffer") };
     unsafe { queue.enqueue_write_buffer(&mut offsets_x_buffer, CL_BLOCKING, 0, &offsets_x, &[]).expect("couldb't write_buffer offsets_x_buffer") };
 
-    println!("[CL] Launching {}x{} kernel", x.len(), y.len());
+    println!("[CL] Launching {}x{} kernel", x.1.len(), y.1.len());
 
     // optimization for the same_vec case
     let kernel_event = if !same_vec {
-        let (strings_y, lens_y, offsets_y) = to_cl(y);
+        let (strings_y, lens_y, offsets_y) = to_cl(&y);
 
         // buffers for y
         let mut strings_y_buffer = unsafe {
             Buffer::<cl_char>::create(&context, CL_MEM_READ_ONLY, strings_y.len(), ptr::null_mut()).expect("couldn't create strings_y_buffer")
         };
         let mut lens_y_buffer = unsafe {
-            Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, y.len(), ptr::null_mut()).expect("couldn't create lens_y_buffer")
+            Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, y.1.len(), ptr::null_mut()).expect("couldn't create lens_y_buffer")
         };
         let mut offsets_y_buffer = unsafe {
-            Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, y.len(), ptr::null_mut()).expect("couldn't create offsets_y_buffer")
+            Buffer::<cl_int>::create(&context, CL_MEM_READ_ONLY, y.1.len(), ptr::null_mut()).expect("couldn't create offsets_y_buffer")
         };
 
         unsafe { queue.enqueue_write_buffer(&mut strings_y_buffer, CL_BLOCKING, 0, &strings_y, &[]).expect("couldb't write_buffer strings_y_buffer") };
@@ -115,7 +112,7 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
                 .set_arg(&lens_y_buffer)
                 .set_arg(&offsets_y_buffer)
                 .set_arg(&ncds_buffer)
-                .set_global_work_sizes(&[x.len(), y.len()])
+                .set_global_work_sizes(&[x.1.len(), y.1.len()])
                 .enqueue_nd_range(&queue)
                 .expect("couldn't enqueue nd range")
         }
@@ -130,7 +127,7 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
                 .set_arg(&lens_x_buffer)
                 .set_arg(&offsets_x_buffer)
                 .set_arg(&ncds_buffer)
-                .set_global_work_sizes(&[x.len(), y.len()])
+                .set_global_work_sizes(&[x.1.len(), y.1.len()])
                 .enqueue_nd_range(&queue)
                 .expect("couldn't enqueue nd range")
         }
@@ -143,7 +140,7 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
     // Create a results array to hold the results from the OpenCL device
     // and enqueue a read command to read the device buffer into the array
     // after the kernel event completes.
-    let mut results = vec![0.0 as cl_float; x.len() * y.len()];
+    let mut results = vec![0.0 as cl_half; x.1.len() * y.1.len()];
     let _read_event =
         unsafe { queue.enqueue_read_buffer(&ncds_buffer, CL_BLOCKING, 0, &mut results, &events).expect("couldn't copy results") };
 
@@ -153,8 +150,8 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
     let duration = end_time - start_time;
     println!("[CL] kernel execution duration (ms): {}", Duration::from_nanos(duration).as_millis());
 
-    (0..x.len())
-        .map(|i| results[i*y.len()..(i+1)*y.len()].to_vec())
+    (0..x.1.len())
+        .map(|i| results[i*y.1.len()..(i+1)*y.1.len()].iter().map(|x| *x as f32).collect())
         .collect()
 }
 
@@ -162,7 +159,7 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
 
 fn main() {
     let start = Instant::now();
-    let text = fs::read_to_string("./input.txt").unwrap()[..5000].to_string();
+    let text = fs::read_to_string("./input.txt").unwrap()[..50].to_string();
 
     // # here are all the unique characters that occur in this text
     let chars = {
@@ -205,7 +202,7 @@ fn main() {
     let before = Instant::now();
     for (x, y) in d.0.iter().zip(d.1.iter()) {
         for token_idx in 0..n_ctx as usize {
-            let context = &x[..token_idx+1];
+            let context = (min(x.0, token_idx+1), x.1);
             let target = &y[token_idx];
 
             // println!("when context is {:?}, target is {}", decode(context.to_vec()), itos.get(target).unwrap());
@@ -216,12 +213,12 @@ fn main() {
     println!("X, Y | took: {:.2?}", before.elapsed());
 
     let before = Instant::now();
-    let ncds = get_ncds(&X, &X);
+    let ncds = get_ncds((&data, &X), (&data, &X));
     println!("ncd_scores | took: {:.2?}", before.elapsed());
 
-    // for line in &ncds {
-    //     println!("{:?}", line);
-    // }
+    for line in &ncds {
+        println!("{:?}", line);
+    }
 
     let before = Instant::now();
     // use the kiddo::KdTree type to get up and running quickly with default settings
@@ -246,9 +243,9 @@ fn main() {
 }
 
 
-fn get_data(data: &Vec<u8>, n_ctx: i64) -> (Vec<&[u8]>, Vec<&[u8]>) {
+fn get_data(data: &Vec<u8>, n_ctx: i64) -> (Vec<(usize, usize)>, Vec<&[u8]>) {
     let ix = Vec::from_iter(0..(data.len() - n_ctx as usize));
-    let x = ix.iter().map(|&i| &data[i..(i+n_ctx as usize)]).collect();
+    let x = ix.iter().map(|&i| (n_ctx as usize, i)).collect();
     let y = ix.iter().map(|&i| &data[(i+1)..(i+n_ctx as usize+1)]).collect();
 
     (x, y)

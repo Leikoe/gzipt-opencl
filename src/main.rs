@@ -4,7 +4,7 @@ use opencl3::device::{get_all_devices, Device, CL_DEVICE_TYPE_GPU, CL_DEVICE_TYP
 use opencl3::kernel::{ExecuteKernel, Kernel};
 use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_WRITE_ONLY};
 use opencl3::program::Program;
-use opencl3::types::{cl_event, cl_float, CL_BLOCKING, CL_NON_BLOCKING, cl_char, cl_int, cl_uchar};
+use opencl3::types::{cl_event, cl_float, CL_BLOCKING, CL_NON_BLOCKING, cl_char, cl_int, cl_uchar, cl_half, cl_short};
 use opencl3::Result;
 use std::{fs, ptr};
 use std::collections::{HashMap, HashSet};
@@ -13,6 +13,8 @@ use kdtree::KdTree;
 use kdtree::ErrorKind;
 use kdtree::distance::squared_euclidean;
 use opencl3::error_codes::ClError;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
 
 const KERNEL_NAME: &str = "ncd_kernel";
 
@@ -77,7 +79,7 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
 
     // output buffer
     let ncds_buffer = unsafe {
-        Buffer::<cl_float>::create(&context, CL_MEM_WRITE_ONLY, x.len() * y.len(), ptr::null_mut()).expect("couldn't create ncds_buffer")
+        Buffer::<cl_half>::create(&context, CL_MEM_WRITE_ONLY, x.len() * y.len(), ptr::null_mut()).expect("couldn't create ncds_buffer")
     };
 
     // Blocking write
@@ -143,7 +145,7 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
     // Create a results array to hold the results from the OpenCL device
     // and enqueue a read command to read the device buffer into the array
     // after the kernel event completes.
-    let mut results = vec![0.0 as cl_float; x.len() * y.len()];
+    let mut results = vec![0.0 as cl_half; x.len() * y.len()];
     let _read_event =
         unsafe { queue.enqueue_read_buffer(&ncds_buffer, CL_BLOCKING, 0, &mut results, &events).expect("couldn't copy results") };
 
@@ -154,7 +156,8 @@ fn get_ncds(x: &Vec<&[u8]>, y: &Vec<&[u8]>) -> Vec<Vec<f32>> {
     println!("[CL] kernel execution duration (ms): {}", Duration::from_nanos(duration).as_millis());
 
     (0..x.len())
-        .map(|i| results[i*y.len()..(i+1)*y.len()].to_vec())
+        .into_par_iter()
+        .map(|i| results[i*y.len()..(i+1)*y.len()].iter().map(|x| half::f16::from_bits(*x).to_f32()).collect())
         .collect()
 }
 
@@ -225,22 +228,22 @@ fn main() {
 
     let before = Instant::now();
     // use the kiddo::KdTree type to get up and running quickly with default settings
-    // let mut kdtree = KdTree::new(ncds[0].len());
-    // 'outer_loop: for i in 0..ncds.len() {
-    //     for j in 0..ncds[i].len() {
-    //         if !ncds[i][j].is_finite() {
-    //             println!("[ERR] non finite f32 at ({i}, {j}), char: {:?}", itos.get(Y[i]));
-    //             continue 'outer_loop;
-    //         }
-    //     }
-    //     kdtree.add(&ncds[i], i).expect("TODO: panic message");
-    // }
-    // println!("build kdtree | took: {:.2?}", before.elapsed());
-    //
-    // let query = get_ncds(&vec![&data[0..n_ctx as usize]], &X)[0].clone();
-    // let closest_points = kdtree.nearest(&query, 7, &squared_euclidean).unwrap();
-    // let closest_points_v = closest_points.iter().map(|x| itos.get(Y[*x.1])).collect::<Vec<_>>();
-    // println!("{:?}", closest_points_v);
+    let mut kdtree = KdTree::new(ncds[0].len());
+    'outer_loop: for i in 0..ncds.len() {
+        // for j in 0..ncds[i].len() {
+        //     if !ncds[i][j].is_finite() {
+        //         println!("[ERR] non finite f32 at ({i}, {j}), char: {:?}", itos.get(Y[i]));
+        //         continue 'outer_loop;
+        //     }
+        // }
+        kdtree.add(&ncds[i], i).expect("TODO: panic message");
+    }
+    println!("build kdtree | took: {:.2?}", before.elapsed());
+
+    let query = get_ncds(&vec![&data[0..n_ctx as usize]], &X)[0].clone();
+    let closest_points = kdtree.nearest(&query, 7, &squared_euclidean).unwrap();
+    let closest_points_v = closest_points.iter().map(|x| itos.get(Y[*x.1])).collect::<Vec<_>>();
+    println!("{:?}", closest_points_v);
 
     println!("TOOK: {}", start.elapsed().as_secs_f64());
 }

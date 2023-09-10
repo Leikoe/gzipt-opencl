@@ -7,4 +7,4 @@ edition = "2021"
 
 [dependencies]
 opencl3 = "0.9.3"
-instant-distance = "0.6.1"
+kdtree = "0.7.0"

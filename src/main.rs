@@ -9,7 +9,9 @@ use opencl3::Result;
 use std::{fs, ptr};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
-use instant_distance::{Builder, Search};
+use kdtree::KdTree;
+use kdtree::ErrorKind;
+use kdtree::distance::squared_euclidean;
 use opencl3::error_codes::ClError;
 
 const KERNEL_NAME: &str = "ncd_kernel";
@@ -219,29 +221,26 @@ fn main() {
     // }
 
     let before = Instant::now();
-    let x: Vec<Point> = ncds.iter().map(|v| Point(v.clone())).collect();
-    println!("x | took: {:.2?}", before.elapsed());
-    let map = Builder::default().build(x, Y);
-    let mut search = Search::default();
-    println!("build ANN | took: {:.2?}", before.elapsed());
+    // use the kiddo::KdTree type to get up and running quickly with default settings
+    let mut kdtree = KdTree::new(ncds[0].len());
+    for i in 0..ncds.len() {
+        for j in 0..ncds[i].len() {
+            if !ncds[i][j].is_finite() {
+                println!("[ERR] non finite f32 at ({i}, {j})");
+            }
+        }
+        kdtree.add(&ncds[i], i).expect("TODO: panic message");
+    }
+    println!("build kdtree | took: {:.2?}", before.elapsed());
 
-    let cambridge_blue = Point(get_ncds(&vec![&data[0..n_ctx as usize]], &X)[0].clone());
-
-    let closest_point = map.search(&cambridge_blue, &mut search).next().unwrap();
-
-    println!("{:?}", closest_point.value);
+    let query = get_ncds(&vec![&data[0..n_ctx as usize]], &X)[0].clone();
+    let closest_points = kdtree.nearest(&query, 3, &squared_euclidean).unwrap();
+    let closest_points_v = closest_points.iter().map(|x| itos.get(Y[*x.1])).collect::<Vec<_>>();
+    println!("{:?}", closest_points_v);
 
     println!("TOOK: {}", start.elapsed().as_secs_f64());
 }
 
-impl instant_distance::Point for Point {
-    fn distance(&self, other: &Self) -> f32 {
-        self.0.iter().zip(other.0.iter()).map(|(x, y)| (y-x).powi(2)).sum::<f32>().sqrt()
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Point(Vec<f32>);
 
 fn get_data(data: &Vec<u8>, n_ctx: i64) -> (Vec<&[u8]>, Vec<&[u8]>) {
     let ix = Vec::from_iter(0..(data.len() - n_ctx as usize));
